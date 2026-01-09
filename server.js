@@ -7,15 +7,25 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+/* =========================
+   OpenAI (SAFE INITIALIZATION)
+   ========================= */
+let openai = null;
 
-// SQLite database
+if (process.env.OPENAI_API_KEY) {
+  openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
+  });
+  console.log("✅ OpenAI key loaded");
+} else {
+  console.warn("⚠️ OPENAI_API_KEY not set — AI replies disabled");
+}
+
+/* =========================
+   SQLite Database
+   ========================= */
 const db = new sqlite3.Database("./chat.db");
 
-// Create table if not exists
 db.run(`
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,6 +34,10 @@ db.run(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
+
+/* =========================
+   Routes
+   ========================= */
 
 // Test route
 app.get("/", (req, res) => {
@@ -36,7 +50,10 @@ app.get("/history", (req, res) => {
     "SELECT sender, message, created_at FROM messages ORDER BY id ASC",
     [],
     (err, rows) => {
-      if (err) return res.json([]);
+      if (err) {
+        console.error(err);
+        return res.json([]);
+      }
       res.json(rows);
     }
   );
@@ -46,11 +63,22 @@ app.get("/history", (req, res) => {
 app.post("/chat", async (req, res) => {
   const userMessage = req.body.message;
 
-  // save user message
+  if (!userMessage) {
+    return res.json({ reply: "⚠️ Empty message" });
+  }
+
+  // Save user message
   db.run(
     "INSERT INTO messages (sender, message) VALUES (?, ?)",
     ["user", userMessage]
   );
+
+  // If OpenAI is not available
+  if (!openai) {
+    return res.json({
+      reply: "⚠️ AI is temporarily unavailable. Please try again later."
+    });
+  }
 
   try {
     const completion = await openai.chat.completions.create({
@@ -63,7 +91,7 @@ app.post("/chat", async (req, res) => {
 
     const reply = completion.choices[0].message.content;
 
-    // save AI reply
+    // Save AI reply
     db.run(
       "INSERT INTO messages (sender, message) VALUES (?, ?)",
       ["bot", reply]
@@ -72,17 +100,15 @@ app.post("/chat", async (req, res) => {
     res.json({ reply });
 
   } catch (error) {
-    console.error(error);
+    console.error("OpenAI error:", error);
     res.json({ reply: "AI error ❌ Please try again later." });
   }
 });
 
-// Render port
+/* =========================
+   Start Server
+   ========================= */
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
-
-
-
-
